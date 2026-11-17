@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0f172a">
+<title>מסלול מהיר</title>
+<style>
+  :root{--bg:#0f172a;--card:#1e293b;--line:#334155;--txt:#e2e8f0;--mut:#94a3b8;--acc:#22c55e;--acc2:#38bdf8;--err:#f87171;--warn:#fbbf24}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Arial,sans-serif;background:var(--bg);color:var(--txt);font-size:16px;line-height:1.45}
+  header{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;position:sticky;top:0;background:var(--bg);z-index:2;border-bottom:1px solid var(--line)}
+  h1{font-size:20px;margin:0}
+  main{max-width:640px;margin:0 auto;padding:12px 14px 60px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin:12px 0}
+  label{display:block;margin:6px 0}
+  textarea,input[type=text],input[type=password],input[type=number],input[type=datetime-local],select{width:100%;background:#0b1220;color:var(--txt);border:1px solid var(--line);border-radius:10px;padding:10px;font-size:16px;font-family:inherit}
+  textarea{min-height:190px;resize:vertical;direction:auto}
+  button{font:inherit;border:0;border-radius:10px;padding:10px 14px;background:#334155;color:var(--txt);cursor:pointer}
+  button.primary{background:var(--acc);color:#052e12;font-weight:700;width:100%;padding:14px;font-size:18px;margin-top:10px}
+  button:disabled{opacity:.5}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .row>*{flex:1}
+  .hint{color:var(--mut);font-size:13px;margin:6px 0}
+  .opts label{display:flex;gap:8px;align-items:center}
+  .opts input[type=radio],.opts input[type=checkbox]{width:20px;height:20px}
+  #parsed{list-style:none;padding:0;margin:8px 0 0;font-size:14px}
+  #parsed li{padding:4px 0;border-bottom:1px dashed var(--line);display:flex;gap:8px}
+  #parsed .n{color:var(--mut);min-width:22px}
+  .err{color:var(--err)} .warn{color:var(--warn)}
+  .summary{font-size:18px;font-weight:700}
+  .stops{list-style:none;padding:0;margin:0}
+  .stop{display:grid;grid-template-columns:34px 1fr;gap:10px;padding:12px 0;border-bottom:1px solid var(--line)}
+  .stop.done{opacity:.45}.stop.done .name{text-decoration:line-through}
+  .badge{width:30px;height:30px;border-radius:50%;background:var(--acc2);color:#04263a;display:flex;align-items:center;justify-content:center;font-weight:800}
+  .stop:first-child .badge{background:var(--acc);color:#052e12}
+  .name{font-weight:600;word-break:break-word}
+  .leg{color:var(--mut);font-size:13px}
+  .links{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
+  .links a,.links button{font-size:14px;padding:8px 12px;border-radius:9px;text-decoration:none;background:#334155;color:var(--txt)}
+  .links a.waze{background:#33ccff;color:#012}
+  .links a.gm{background:#4285f4;color:#fff}
+  .big a{display:block;text-align:center;margin:8px 0;padding:12px;border-radius:10px;background:#4285f4;color:#fff;text-decoration:none;font-weight:700}
+  #status{margin-top:10px;min-height:1em}
+  .spinner{display:inline-block;width:16px;height:16px;border:3px solid #fff3;border-top-color:var(--acc);border-radius:50%;animation:s 1s linear infinite;vertical-align:middle;margin-inline-start:6px}
+  @keyframes s{to{transform:rotate(360deg)}}
+  a{color:var(--acc2)}
+</style>
+</head>
+<body>
+<header>
+  <h1>🚗 מסלול מהיר</h1>
+  <button id="settingsBtn" aria-label="הגדרות">⚙️ הגדרות</button>
+</header>
+<main>
+
+  <section id="settings" class="card" hidden>
+    <label for="apiKey"><b>מפתח Google Maps API</b> (עם Routes API מופעל)</label>
+    <input id="apiKey" type="password" autocomplete="off" placeholder="AIza...">
+    <div class="row" style="margin-top:8px">
+      <button id="saveKey">שמירה</button>
+      <button id="showKey">הצג / הסתר</button>
+    </div>
+    <p class="hint">המפתח נשמר רק בדפדפן שלך במכשיר הזה. מומלץ להגביל אותו ב-Google Cloud ל-Routes API ולכתובת האתר שבו הקובץ מאוחסן.</p>
+  </section>
+
+  <section class="card opts">
+    <b>נקודת מוצא</b>
+    <label><input type="radio" name="start" value="current" checked> המיקום הנוכחי שלי</label>
+    <label><input type="radio" name="start" value="other"> נקודה אחרת</label>
+    <input id="startAddr" type="text" hidden placeholder="כתובת, קישור גוגל מפות או קואורדינטות">
+    <div id="startParsed" class="hint"></div>
+  </section>
+
+  <section class="card">
+    <label for="stops"><b>עצירות</b> — אחת בכל שורה, בכל סדר שהוא. האפליקציה תסדר אותן לפי הסדר המהיר ביותר.</label>
+    <p class="hint">אפשר להדביק כתובת, קישור מגוגל מפות, או קואורדינטות (32.0853, 34.7818). בקישור מקוצר (maps.app.goo.gl) הדביקו גם את שם המקום/הכתובת שבשורה שמעליו — כך זה מגיע כשמשתפים מגוגל מפות.</p>
+    <textarea id="stops" placeholder="דיזנגוף 50, תל אביב&#10;https://www.google.com/maps/place/...&#10;32.0853, 34.7818"></textarea>
+    <div class="row" style="margin-top:8px">
+      <button id="clear">ניקוי</button>
+    </div>
+    <ul id="parsed"></ul>
+  </section>
+
+  <section class="card opts">
+    <b>איפה לסיים?</b>
+    <label><input type="radio" name="end" value="free" checked> בעצירה שיוצא הכי מהר (האפליקציה בוחרת)</label>
+    <label><input type="radio" name="end" value="loop"> לחזור לנקודת המוצא</label>
+    <label><input type="radio" name="end" value="fixed"> בעצירה מסוימת:</label>
+    <select id="endSel" hidden></select>
+    <hr style="border-color:var(--line)">
+    <label for="when"><b>יציאה</b></label>
+    <select id="when"><option value="now">עכשיו</option><option value="later">בשעה אחרת</option></select>
+    <input id="depart" type="datetime-local" hidden style="margin-top:8px">
+    <label for="dwell" style="margin-top:10px">זמן שהייה בכל עצירה (דקות, לחישוב שעות הגעה)</label>
+    <input id="dwell" type="number" min="0" step="1" value="0" inputmode="numeric">
+    <label style="margin-top:10px"><input type="checkbox" id="avoidTolls"> הימנעות מכבישי אגרה (כביש 6 וכו')</label>
+    <button id="go" class="primary">חשב מסלול מהיר ⚡</button>
+    <div id="status"></div>
+  </section>
+
+  <section id="result"></section>
+</main>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const store = {
+  get(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } },
+  set(k,v){ try{ localStorage.setItem(k,v); }catch(e){} }
+};
+
+/* ---------- settings ---------- */
+$('apiKey').value = store.get('gmKey') || '';
+if(!$('apiKey').value) $('settings').hidden = false;
+$('settingsBtn').onclick = () => $('settings').hidden = !$('settings').hidden;
+$('saveKey').onclick = () => { store.set('gmKey', $('apiKey').value.trim()); $('settings').hidden = true; };
+$('showKey').onclick = () => { const i=$('apiKey'); i.type = i.type==='password'?'text':'password'; };
+$('when').onchange = () => { $('depart').hidden = $('when').value!=='later'; };
+
+/* ---------- parsing ---------- */
+const NUM = '(-?\\d{1,3}\\.\\d+)';
+const COORD_RE = new RegExp(NUM + '\\s*,\\s*' + NUM);
+
+function placeNameFromUrl(u){
+  const m = u.match(/\/place\/([^\/@?]+)/);
+  return m ? m[1].replace(/\+/g,' ').trim() : '';
+}
+function validLatLng(lat,lng){ return Math.abs(lat)<=90 && Math.abs(lng)<=180; }
+
+function parseLine(raw){
+  const s = raw.trim();
+  if(!s) return null;
+  const um = s.match(/https?:\/\/\S+/);
+  const text = um ? s.replace(um[0],'').replace(/\s+/g,' ').trim() : s;
+  if(um){
+    let u = um[0];
+    try{ u = decodeURIComponent(u); }catch(e){}
+    const pn = placeNameFromUrl(u);
+    const label = text || pn;
+    let m;
+    if((m = u.match(/!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/)))
+      return {label: label || `${m[1]}, ${m[2]}`, lat:+m[1], lng:+m[2]};
+    if((m = u.match(new RegExp('[?&](?:q|query|ll|destination|daddr|center)=' + NUM + '(?:,|%2C)\\s*' + NUM))))
+      return {label: label || `${m[1]}, ${m[2]}`, lat:+m[1], lng:+m[2]};
+    if((m = u.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/)))
+      return {label: label || `${m[1]}, ${m[2]}`, lat:+m[1], lng:+m[2]};
+    if((m = u.match(/[?&](?:q|query|destination|daddr)=([^&]+)/))){
+      const a = m[1].replace(/\+/g,' ').trim();
+      return {label: label || a, address: a};
+    }
+    if(pn) return {label: pn, address: pn};
+    if(text) return {label: text, address: text};
+    if(/goo\.gl|maps\.app/i.test(u)) return {shortLink:true, raw:s};
+    return {error:'לא הצלחתי לקרוא את הקישור', raw:s};
+  }
+  const cm = s.match(COORD_RE);
+  if(cm && validLatLng(+cm[1],+cm[2])){
+    const lbl = s.replace(cm[0],'').replace(/[:\-–|]+\s*$/,'').trim();
+    return {label: lbl || `${cm[1]}, ${cm[2]}`, lat:+cm[1], lng:+cm[2]};
+  }
+  return {label:s, address:s};
+}
+
+function parseAll(text){
+  const out = [];
+  for(const line of text.split(/\r?\n/)){
+    const p = parseLine(line);
+    if(!p) continue;
+    if(p.shortLink){
+      // Google Maps share = "name/address" line + short link line → the text line already covers it
+      const prev = out[out.length-1];
+      if(prev && prev.address && !prev._linked){ prev._linked = true; continue; }
+      out.push({error:'קישור מקוצר בלי כתובת – הדביקו גם את שם המקום/הכתובת, או פתחו את הקישור והעתיקו את הקישור המלא', raw:p.raw});
+      continue;
+    }
+    out.push(p);
+  }
+  return out;
+}
+
+function renderParsed(){
+  const pts = parseAll($('stops').value);
+  store.set('stopsText', $('stops').value);
+  $('parsed').innerHTML = pts.map((p,i)=>{
+    const icon = p.error ? '⚠️' : (p.lat!=null ? '📌' : '🔤');
+    const txt = p.error ? `<span class="err">${esc(p.error)}</span>` : esc(p.label);
+    return `<li><span class="n">•</span><span>${icon} ${txt}</span></li>`;
+  }).join('') + (pts.length ? `<li class="hint">${pts.length} עצירות</li>` : '');
+  // refresh the "end at a specific stop" list
+  const sel = $('endSel'), prev = sel.value;
+  sel.innerHTML = pts.map((p,i)=> p.error ? '' : `<option value="${i}">${esc(p.label)}</option>`).join('');
+  if(prev && sel.querySelector(`option[value="${prev}"]`)) sel.value = prev;
+  return pts;
+}
+
+function parseStart(){
+  const v = $('startAddr').value;
+  store.set('startText', v);
+  const p = parseAll(v)[0] || null;
+  $('startParsed').innerHTML = !p ? '' : p.error ? `<span class="err">⚠️ ${esc(p.error)}</span>` : `${p.lat!=null?'📌':'🔤'} ${esc(p.label)}`;
+  return p;
+}
+function syncStartUI(){
+  const other = document.querySelector('input[name=start]:checked').value === 'other';
+  $('startAddr').hidden = !other; $('startParsed').hidden = !other;
+  store.set('startMode', other ? 'other' : 'current');
+}
+document.querySelectorAll('input[name=start]').forEach(r=> r.onchange = syncStartUI);
+document.querySelectorAll('input[name=end]').forEach(r=> r.onchange = () => {
+  $('endSel').hidden = document.querySelector('input[name=end]:checked').value !== 'fixed';
+});
+$('startAddr').value = store.get('startText') || '';
+if(store.get('startMode') === 'other') document.querySelector('input[name=start][value=other]').checked = true;
+$('startAddr').addEventListener('input', parseStart);
+
+function getCurrentLocation(){
+  return new Promise((resolve, reject) => {
+    if(!navigator.geolocation) return reject(new Error('הדפדפן לא תומך באיתור מיקום – בחרו "נקודה אחרת"'));
+    navigator.geolocation.getCurrentPosition(
+      pos => resolve({label:'המיקום שלי', lat:pos.coords.latitude, lng:pos.coords.longitude}),
+      err => reject(new Error('לא הצלחתי לקבל מיקום (' + err.message + ') – אשרו גישה למיקום או בחרו "נקודה אחרת"')),
+      {enableHighAccuracy:true, timeout:15000, maximumAge:60000});
+  });
+}
+function esc(s){ return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+$('stops').value = store.get('stopsText') || '';
+$('stops').addEventListener('input', renderParsed);
+renderParsed(); parseStart(); syncStartUI();
+$('clear').onclick = () => { $('stops').value=''; renderParsed(); };
+
+/* ---------- routing (Google Routes API, traffic-aware) ---------- */
+function wp(p){
+  return p.lat!=null
+    ? {location:{latLng:{latitude:p.lat, longitude:p.lng}}}
+    : {address:p.address};
+}
+const secs = d => d ? parseInt(String(d),10) : 0;
+
+async function computeRoute(key, origin, dest, inter, opt){
+  const body = {
+    origin: wp(origin), destination: wp(dest),
+    intermediates: inter.map(wp),
+    travelMode:'DRIVE', routingPreference:'TRAFFIC_AWARE',
+    languageCode:'he', units:'METRIC',
+    routeModifiers:{avoidTolls: !!opt.avoidTolls}
+  };
+  if(inter.length > 1) body.optimizeWaypointOrder = true;
+  if(opt.departure) body.departureTime = opt.departure;
+  const res = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
+    method:'POST',
+    headers:{
+      'Content-Type':'application/json',
+      'X-Goog-Api-Key': key,
+      'X-Goog-FieldMask':'routes.duration,routes.staticDuration,routes.distanceMeters,routes.optimizedIntermediateWaypointIndex,routes.legs.duration,routes.legs.distanceMeters,routes.legs.startLocation,routes.legs.endLocation'
+    },
+    body: JSON.stringify(body)
+  });
+  let j = {};
+  try{ j = await res.json(); }catch(e){}
+  if(!res.ok) throw new Error((j.error && j.error.message) || ('HTTP '+res.status));
+  if(!j.routes || !j.routes.length) throw new Error('לא נמצא מסלול בין הנקודות');
+  const r = j.routes[0];
+  const idx = r.optimizedIntermediateWaypointIndex || inter.map((_,i)=>i);
+  const order = [origin, ...idx.map(i=>inter[i]), dest];
+  return {order, legs:r.legs||[], duration:secs(r.duration), staticDuration:secs(r.staticDuration), distance:r.distanceMeters||0};
+}
+
+async function optimize(start, rest, mode, endIdx, opt){
+  const key = store.get('gmKey') || $('apiKey').value.trim();
+  if(!key) throw new Error('צריך להזין מפתח API בהגדרות');
+  if(mode === 'loop')
+    return computeRoute(key, start, start, rest, opt);
+  if(mode === 'fixed')
+    return computeRoute(key, start, rest[endIdx], rest.filter((_,k)=>k!==endIdx), opt);
+  if(rest.length === 1)
+    return computeRoute(key, start, rest[0], [], opt);
+  // free end: try every stop as the final destination (in parallel), keep the fastest
+  const tries = rest.map((d,i)=> computeRoute(key, start, d, rest.filter((_,k)=>k!==i), opt).catch(e=>({error:e})));
+  const results = await Promise.all(tries);
+  const ok = results.filter(r=>!r.error);
+  if(!ok.length) throw results[0].error;
+  ok.sort((a,b)=>a.duration-b.duration);
+  return ok[0];
+}
+
+/* ---------- UI ---------- */
+function setStatus(msg, cls='', spin=false){
+  $('status').className = cls;
+  $('status').innerHTML = esc(msg) + (spin?'<span class="spinner"></span>':'');
+}
+const fmtDur = s => { const m=Math.round(s/60); return m<60 ? `${m} דק'` : `${Math.floor(m/60)}:${String(m%60).padStart(2,'0')} שע'`; };
+const fmtKm = m => (m/1000).toFixed(m<10000?1:0)+' ק"מ';
+const fmtClock = d => d.toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'});
+
+$('go').onclick = async () => {
+  const pts = renderParsed();
+  const bad = pts.filter(p=>p.error);
+  if(bad.length){ setStatus('יש שורות שלא הצלחתי לקרוא (מסומנות ⚠️)','err'); return; }
+  if(pts.length < 1){ setStatus('צריך לפחות עצירה אחת','err'); return; }
+  if(pts.length > 26){ setStatus('עד 26 עצירות לכל היותר (מגבלת Google)','err'); return; }
+  const mode = document.querySelector('input[name=end]:checked').value;
+  const endIdx = +$('endSel').value || 0;
+  if(mode === 'loop' && pts.length > 25){ setStatus('בחזרה לנקודת המוצא – עד 25 עצירות','err'); return; }
+  let start;
+  if(document.querySelector('input[name=start]:checked').value === 'other'){
+    start = parseStart();
+    if(!start || start.error){ setStatus('נקודת המוצא לא תקינה','err'); return; }
+  } else {
+    setStatus('מאתר את המיקום הנוכחי…','',true);
+    try{ start = await getCurrentLocation(); }
+    catch(e){ setStatus(e.message,'err'); return; }
+  }
+  const opt = { avoidTolls: $('avoidTolls').checked };
+  let departDate = new Date();
+  if($('when').value === 'later'){
+    if(!$('depart').value){ setStatus('בחרו שעת יציאה','err'); return; }
+    departDate = new Date($('depart').value);
+    if(departDate <= new Date()){ setStatus('שעת היציאה צריכה להיות בעתיד','err'); return; }
+    opt.departure = departDate.toISOString();
+  }
+  $('go').disabled = true;
+  setStatus(mode==='free' && pts.length>1 ? `בודק ${pts.length} אפשרויות סיום עם תנועה בזמן אמת…` : 'מחשב מסלול עם תנועה בזמן אמת…','',true);
+  try{
+    const r = await optimize(start, pts, mode, endIdx, opt);
+    r.departAt = departDate.getTime();
+    r.dwell = Math.max(0, +$('dwell').value || 0);
+    r.done = [];
+    store.set('lastResult', JSON.stringify(r));
+    renderResult(r);
+    setStatus('');
+    $('result').scrollIntoView({behavior:'smooth'});
+  }catch(e){
+    setStatus('שגיאה: ' + e.message, 'err');
+  }finally{ $('go').disabled = false; }
+};
+
+function pointCoords(r, i){
+  // coordinates Google resolved for each stop in the optimized order
+  const L = r.legs;
+  const ll = i < L.length ? (L[i].startLocation||{}).latLng : (L[L.length-1]&&L[L.length-1].endLocation||{}).latLng;
+  if(ll) return `${ll.latitude},${ll.longitude}`;
+  const p = r.order[i];
+  return p.lat!=null ? `${p.lat},${p.lng}` : null;
+}
+function wazeUrl(c, p){ return c ? `https://waze.com/ul?ll=${c}&navigate=yes` : `https://waze.com/ul?q=${encodeURIComponent(p.address||p.label)}&navigate=yes`; }
+function gmapsLegUrl(c, p){ return `https://www.google.com/maps/dir/?api=1&travelmode=driving&destination=${encodeURIComponent(c || p.address || p.label)}`; }
+
+function renderResult(r){
+  const n = r.order.length;
+  const coords = r.order.map((_,i)=>pointCoords(r,i));
+  let t = r.departAt;
+  const rows = r.order.map((p,i)=>{
+    let legInfo = '';
+    if(i>0){
+      const leg = r.legs[i-1] || {};
+      t += secs(leg.duration)*1000;
+      legInfo = `<div class="leg">+${fmtDur(secs(leg.duration))} · ${fmtKm(leg.distanceMeters||0)} · הגעה ~${fmtClock(new Date(t))}</div>`;
+      if(i < n-1) t += r.dwell*60000;
+    } else {
+      legInfo = `<div class="leg">יציאה ${fmtClock(new Date(r.departAt))}</div>`;
+    }
+    const done = r.done.includes(i);
+    const links = i===0 ? '' : `<div class="links">
+        <a class="waze" href="${wazeUrl(coords[i],p)}" target="_blank" rel="noopener">Waze</a>
+        <a class="gm" href="${gmapsLegUrl(coords[i],p)}" target="_blank" rel="noopener">Google Maps</a>
+        <button data-done="${i}">${done?'↩︎ בטל':'✓ בוצע'}</button></div>`;
+    return `<li class="stop${done?' done':''}"><div class="badge">${i===0?'🏁':i}</div><div><div class="name">${esc(p.label)}</div>${legInfo}${links}</div></li>`;
+  }).join('');
+
+  // whole route in Google Maps (max 10 points per link → split into parts)
+  const fullLinks = [];
+  if(coords.every(Boolean)){
+    const CH = 10;
+    for(let s=0; s<n-1; s+=CH-1){
+      const seg = coords.slice(s, Math.min(n, s+CH));
+      fullLinks.push(`https://www.google.com/maps/dir/${seg.join('/')}/data=!4m2!4m1!3e0`);
+    }
+  }
+  const delay = r.staticDuration ? r.duration - r.staticDuration : 0;
+  const totalWithDwell = r.duration + r.dwell*60*Math.max(0,n-2);
+  $('result').innerHTML = `<div class="card">
+      <div class="summary">⏱ ${fmtDur(r.duration)} נסיעה · ${fmtKm(r.distance)}</div>
+      <div class="hint">${delay>60 ? `כולל ~${fmtDur(delay)} עיכוב בגלל תנועה · ` : ''}${r.dwell? `סה"כ עם עצירות: ${fmtDur(totalWithDwell)} · `:''}סיום משוער ~${fmtClock(new Date(r.departAt + totalWithDwell*1000))}</div>
+      <div class="big">${fullLinks.map((u,k)=>`<a href="${u}" target="_blank" rel="noopener">פתח את כל המסלול ב-Google Maps${fullLinks.length>1?` (חלק ${k+1}/${fullLinks.length})`:''}</a>`).join('')}</div>
+      <p class="hint">Waze מקבל יעד אחד בכל פעם – לחצו על Waze ליד כל עצירה לפי הסדר.</p>
+      <ol class="stops">${rows}</ol>
+      <div class="links" style="margin-top:12px"><button id="copyOrder">📋 העתק את סדר העצירות</button></div>
+    </div>`;
+  $('result').querySelectorAll('[data-done]').forEach(b=> b.onclick = () => {
+    const i = +b.dataset.done;
+    r.done = r.done.includes(i) ? r.done.filter(x=>x!==i) : [...r.done, i];
+    store.set('lastResult', JSON.stringify(r)); renderResult(r);
+  });
+  $('copyOrder').onclick = async () => {
+    const txt = r.order.map((p,i)=>`${i===0?'מוצא':i}. ${p.label}`).join('\n');
+    try{ await navigator.clipboard.writeText(txt); $('copyOrder').textContent='✓ הועתק'; }
+    catch(e){ $('copyOrder').textContent='ההעתקה נחסמה'; }
+  };
+}
+
+try{ const last = JSON.parse(store.get('lastResult')||'null'); if(last && last.order) renderResult(last); }catch(e){}
+</script>
+</body>
+</html>
