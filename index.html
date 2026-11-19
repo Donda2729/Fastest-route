@@ -74,7 +74,7 @@
 
   <section class="card">
     <label for="stops"><b>עצירות</b> — אחת בכל שורה, בכל סדר שהוא. האפליקציה תסדר אותן לפי הסדר המהיר ביותר.</label>
-    <p class="hint">אפשר להדביק כתובת, קישור מגוגל מפות, או קואורדינטות (32.0853, 34.7818). בקישור מקוצר (maps.app.goo.gl) הדביקו גם את שם המקום/הכתובת שבשורה שמעליו — כך זה מגיע כשמשתפים מגוגל מפות.</p>
+    <p class="hint">אפשר להדביק קישורים מגוגל מפות (גם מקוצרים, maps.app.goo.gl), כתובות או קואורדינטות (32.0853, 34.7818).</p>
     <textarea id="stops" placeholder="דיזנגוף 50, תל אביב&#10;https://www.google.com/maps/place/...&#10;32.0853, 34.7818"></textarea>
     <div class="row" style="margin-top:8px">
       <button id="clear">ניקוי</button>
@@ -136,6 +136,7 @@ function parseLine(raw){
   if(um){
     let u = um[0];
     try{ u = decodeURIComponent(u); }catch(e){}
+    if(SHORT_RE.test(u)) return {short: um[0], label: text, fallback: text || null};
     const pn = placeNameFromUrl(u);
     const label = text || pn;
     let m;
@@ -151,7 +152,6 @@ function parseLine(raw){
     }
     if(pn) return {label: pn, address: pn};
     if(text) return {label: text, address: text};
-    if(/goo\.gl|maps\.app/i.test(u)) return {shortLink:true, raw:s};
     return {error:'לא הצלחתי לקרוא את הקישור', raw:s};
   }
   const cm = s.match(COORD_RE);
@@ -159,37 +159,117 @@ function parseLine(raw){
     const lbl = s.replace(cm[0],'').replace(/[:\-–|]+\s*$/,'').trim();
     return {label: lbl || `${cm[1]}, ${cm[2]}`, lat:+cm[1], lng:+cm[2]};
   }
-  return {label:s, address:s};
+  return {label:s, address:s, plain:true};
 }
+
+/* ---------- short links (maps.app.goo.gl) ----------
+   A browser page can't follow Google's short-link redirect itself (CORS),
+   so it asks public CORS proxies, one after another, and reads the
+   coordinates from the full URL / page it lands on. Results are cached. */
+const SHORT_RE = /^(?:https?:\/\/)?(?:maps\.app\.goo\.gl|goo\.gl\/maps|g\.co\/kgs|share\.google)\//i;
+let shortCache = {};
+try{ shortCache = JSON.parse(store.get('shortCache')||'{}') || {}; }catch(e){ shortCache = {}; }
+const shortPending = {};
+const shortFailed = {};
+
+function deepDecode(s){
+  s = String(s||'').replace(/&amp;/g,'&').replace(/\\u003d/g,'=').replace(/\\u0026/g,'&');
+  for(let i=0;i<3;i++){ try{ const d = decodeURIComponent(s); if(d===s) break; s = d; }catch(e){ break; } }
+  return s;
+}
+function extractPoint(finalUrl, html){
+  let nameOnly = null;
+  const urls = [];
+  if(finalUrl){
+    urls.push(finalUrl);
+    const c = finalUrl.match(/[?&]continue=([^&]+)/); if(c) urls.push(c[1]);
+  }
+  for(let u of urls){
+    u = deepDecode(u);
+    if(SHORT_RE.test(u) || /consent\.google/.test(u)) continue;
+    const p = parseLine(u);
+    if(!p || p.error || p.short) continue;
+    if(p.lat!=null) return p;
+    nameOnly = nameOnly || p;
+  }
+  if(html){
+    const h = deepDecode(html);
+    const t = h.match(/<meta[^>]+property="og:title"[^>]+content="([^"]+)"/) || h.match(/<meta[^>]+content="([^"]+)"[^>]+property="og:title"/);
+    const name = t ? t[1].split(' · ')[0].trim() : '';
+    const goodName = name && !/^Google( Maps)?$/i.test(name) ? name : '';
+    const m = h.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/) || h.match(/markers=(-?\d+\.\d+)(?:,|%2C)(-?\d+\.\d+)/) || h.match(/center=(-?\d+\.\d+)(?:,|%2C)(-?\d+\.\d+)/);
+    if(m && validLatLng(+m[1],+m[2])) return {label: goodName || (nameOnly && nameOnly.label) || `${m[1]}, ${m[2]}`, lat:+m[1], lng:+m[2]};
+    const mu = h.match(/https:\/\/(?:www\.)?google\.[a-z.]+\/maps[^"'\s<>\\]+/);
+    if(mu){ const p = parseLine(mu[0]); if(p && p.lat!=null) return p; if(p && !p.error && !nameOnly) nameOnly = p; }
+    if(!nameOnly && goodName) nameOnly = {label: goodName, address: goodName};
+  }
+  return nameOnly;
+}
+const PROXIES = [
+  async (u, signal) => { const r = await fetch('https://api.allorigins.win/get?url=' + encodeURIComponent(u), {signal}); if(!r.ok) throw new Error(r.status); const j = await r.json(); return {url: j.status && j.status.url, html: j.contents}; },
+  async (u, signal) => { const r = await fetch('https://corsproxy.io/?url=' + encodeURIComponent(u), {signal}); if(!r.ok) throw new Error(r.status); return {url:'', html: await r.text()}; },
+  async (u, signal) => { const r = await fetch('https://api.codetabs.com/v1/proxy/?quest=' + encodeURIComponent(u), {signal}); if(!r.ok) throw new Error(r.status); return {url:'', html: await r.text()}; }
+];
+function resolveShort(url){
+  if(shortCache[url]) return Promise.resolve(shortCache[url]);
+  if(shortPending[url]) return shortPending[url];
+  return shortPending[url] = (async () => {
+    for(const proxy of PROXIES){
+      const ctl = new AbortController(); const timer = setTimeout(()=>ctl.abort(), 12000);
+      try{
+        const {url:finalUrl, html} = await proxy(url, ctl.signal);
+        const p = extractPoint(finalUrl, html);
+        if(p){ const res = p.lat!=null ? {label:p.label, lat:p.lat, lng:p.lng} : {label:p.label, address:p.address};
+          shortCache[url] = res; store.set('shortCache', JSON.stringify(shortCache)); return res; }
+      }catch(e){ /* try next proxy */ }
+      finally{ clearTimeout(timer); }
+    }
+    shortFailed[url] = true;
+    return null;
+  })().finally(() => { delete shortPending[url]; refreshAll(); });
+}
+function applyShort(p){
+  if(!p.short) return p;
+  const r = shortCache[p.short];
+  if(r) return {...r, label: p.label || r.label};
+  if(shortPending[p.short]) return {...p, pending:true};
+  if(shortFailed[p.short]){
+    if(p.fallback) return {label:p.label, address:p.fallback};
+    return {error:'לא הצלחתי לפענח את הקישור המקוצר. פתחו אותו בדפדפן והעתיקו את הקישור המלא משורת הכתובת', raw:p.short};
+  }
+  resolveShort(p.short);
+  return {...p, pending:true};
+}
+function refreshAll(){ renderParsed(); parseStart(); }
+function waitForShortLinks(){ return Promise.all(Object.values(shortPending)); }
 
 function parseAll(text){
   const out = [];
   for(const line of text.split(/\r?\n/)){
     const p = parseLine(line);
     if(!p) continue;
-    if(p.shortLink){
-      // Google Maps share = "name/address" line + short link line → the text line already covers it
+    if(p.short && !p.label){
+      // Google Maps share on phones = "place name" line + short link line → one stop
       const prev = out[out.length-1];
-      if(prev && prev.address && !prev._linked){ prev._linked = true; continue; }
-      out.push({error:'קישור מקוצר בלי כתובת – הדביקו גם את שם המקום/הכתובת, או פתחו את הקישור והעתיקו את הקישור המלא', raw:p.raw});
-      continue;
+      if(prev && prev.plain && !prev.short){ prev.short = p.short; prev.fallback = prev.address; continue; }
     }
     out.push(p);
   }
-  return out;
+  return out.map(applyShort);
 }
 
 function renderParsed(){
   const pts = parseAll($('stops').value);
   store.set('stopsText', $('stops').value);
   $('parsed').innerHTML = pts.map((p,i)=>{
+    if(p.pending) return `<li><span class="n">•</span><span>⏳ ${esc(p.label || 'מפענח קישור גוגל מפות…')}</span></li>`;
     const icon = p.error ? '⚠️' : (p.lat!=null ? '📌' : '🔤');
     const txt = p.error ? `<span class="err">${esc(p.error)}</span>` : esc(p.label);
     return `<li><span class="n">•</span><span>${icon} ${txt}</span></li>`;
   }).join('') + (pts.length ? `<li class="hint">${pts.length} עצירות</li>` : '');
   // refresh the "end at a specific stop" list
   const sel = $('endSel'), prev = sel.value;
-  sel.innerHTML = pts.map((p,i)=> p.error ? '' : `<option value="${i}">${esc(p.label)}</option>`).join('');
+  sel.innerHTML = pts.map((p,i)=> p.error ? '' : `<option value="${i}">${esc(p.label || 'קישור גוגל מפות')}</option>`).join('');
   if(prev && sel.querySelector(`option[value="${prev}"]`)) sel.value = prev;
   return pts;
 }
@@ -198,7 +278,7 @@ function parseStart(){
   const v = $('startAddr').value;
   store.set('startText', v);
   const p = parseAll(v)[0] || null;
-  $('startParsed').innerHTML = !p ? '' : p.error ? `<span class="err">⚠️ ${esc(p.error)}</span>` : `${p.lat!=null?'📌':'🔤'} ${esc(p.label)}`;
+  $('startParsed').innerHTML = !p ? '' : p.pending ? '⏳ מפענח קישור גוגל מפות…' : p.error ? `<span class="err">⚠️ ${esc(p.error)}</span>` : `${p.lat!=null?'📌':'🔤'} ${esc(p.label)}`;
   return p;
 }
 function syncStartUI(){
@@ -295,6 +375,11 @@ const fmtKm = m => (m/1000).toFixed(m<10000?1:0)+' ק"מ';
 const fmtClock = d => d.toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'});
 
 $('go').onclick = async () => {
+  renderParsed(); parseStart();
+  if(Object.keys(shortPending).length){
+    setStatus('מפענח קישורים מקוצרים של גוגל מפות…','',true);
+    await waitForShortLinks();
+  }
   const pts = renderParsed();
   const bad = pts.filter(p=>p.error);
   if(bad.length){ setStatus('יש שורות שלא הצלחתי לקרוא (מסומנות ⚠️)','err'); return; }
